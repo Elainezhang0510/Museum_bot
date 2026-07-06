@@ -1,117 +1,61 @@
-"""
-TTS Manager for Alibaba Cloud DashScope CosyVoice
 
-This module handles speech synthesis using the DashScope SDK.
-It is designed to be efficient by caching generated speech and using a robust
-MP3 playback library (pygame).
-"""
 
+# tts.py - gTTS 版本 (适用于 Raspberry Pi)
+from ast import Str
 import os
-import time
-import hashlib
 import json
-import dashscope
-import pyaudio
-from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat, ResultCallback
+import hashlib
+from re import I
+import time
+from typing import Optional
+from winsound import PlaySound
+from gtts import gTTS, lang
+import pygame
 
-# --- Configuration ---
-TEMP_MP3_PATH = os.path.join(os.path.dirname(__file__), "temp_tts_output.mp3")
-TTS_CACHE_DIR = os.path.join(os.path.dirname(__file__), "tts_cache")
-TTS_CACHE_EN_DIR = os.path.join(TTS_CACHE_DIR, "en")
-TTS_CACHE_ZH_DIR = os.path.join(TTS_CACHE_DIR, "zh")
+
+
+# 可选：用于 mp3 -> wav 转换（需要 ffmpeg 安装）
+try:
+    from pydub import AudioSegment
+    PDUB_AVAILABLE = True
+except Exception:
+    PDUB_AVAILABLE = False
+
+# ----------------------
+# 全局配置
+TTS_INITIALIZED = False
 TTS_PROMPTS = {}
 
+# 缓存目录（保存在 sounds/en, sounds/zh）
+TTS_CACHE_EN_DIR = os.path.join("sounds", "en")
+TTS_CACHE_ZH_DIR = os.path.join("sounds", "zh")
 
-def _load_alibaba_api_key():
-    """
-    Load Alibaba API key from environment variables.
-
-    Returns:
-        str or None: The Alibaba API key if found, None otherwise.
-    """
-    # Get the key from environment variables
-    api_key = os.environ.get("ALIBABA_API_KEY")
-    if api_key:
-        print("[TTS Manager] Using Alibaba API key from environment variable")
-        return api_key
-
-    print("[TTS Manager] ALIBABA_API_KEY environment variable not set")
-    return None
-
-
-# DashScope CosyVoice Speaker Mapping
-COSVOICE_VOICE_MAP = {
-    "ZH": "longxiaochun_v2",
-    "EN": "longxiaochun_v2",  # Using the same voice for both languages for now
+# gTTS 语言代码映射
+LANG_CODE_MAP = {
+    "EN": "en",
+    "ZH": "zh-CN",
 }
 
-# --- Initialization Status ---
-TTS_INITIALIZED = False
-
-# Global PyAudio instance
-PYAUDIO_INSTANCE = None
-
-
-def initialize_tts():
-    """
-    Initializes the DashScope SDK. This should be
-    called once when the application starts.
-    """
-    global TTS_INITIALIZED, PYAUDIO_INSTANCE
-    print("[TTS Manager] Initializing Text-to-Speech service...")
-    start_time = time.time()
-
-    load_tts_prompts()
-
-    # Load Alibaba API key from secrets.json
-    alibaba_api_key = _load_alibaba_api_key()
-    if not alibaba_api_key:
-        print(
-            "[TTS Manager] CRITICAL ERROR: 'alibaba_api_key' not found in secrets.json."
-        )
-        TTS_INITIALIZED = False
-        return False
-
-    dashscope.api_key = alibaba_api_key
-    print("[TTS Manager] Alibaba API Key found and set for DashScope.")
-    TTS_INITIALIZED = True
-
-    # Initialize PyAudio
-    try:
-        PYAUDIO_INSTANCE = pyaudio.PyAudio()
-        print("[TTS Manager] PyAudio initialized.")
-    except Exception as e:
-        print(f"[TTS Manager] CRITICAL ERROR: Failed to initialize PyAudio: {e}")
-        return False
-
-    duration = time.time() - start_time
-    print(f"[TTS Manager] TTS initialization complete in {duration:.2f} seconds.")
-    return True
+# ----------------------
 
 
 def load_tts_prompts():
-    # Load TTS prompts from the file system
     global TTS_PROMPTS
     try:
-        import os
-
-        # Try to find the data file in the file system
         base_dir = os.path.dirname(os.path.abspath(__file__))
         data_file_path = os.path.join(base_dir, "data", "generated_tts_prompts.json")
-        # If not found, try in the current directory
         if not os.path.exists(data_file_path):
-            data_file_path = os.path.join(
-                os.getcwd(), "data", "generated_tts_prompts.json"
-            )
+            data_file_path = os.path.join(os.getcwd(), "data", "generated_tts_prompts.json")
         with open(data_file_path, "r", encoding="utf-8") as f:
-            TTS_PROMPTS = json.load(f).get("tts_prompts", {})
+            obj = json.load(f)
+            TTS_PROMPTS = obj.get("tts_prompts", obj)
         print("[TTS Manager] Loaded TTS prompts from file system.")
     except Exception as e:
         print(f"[TTS Manager] WARNING: Failed to load TTS prompts: {e}")
         TTS_PROMPTS = {}
 
 
-def get_tts_prompt(key: str, default: str | None = None) -> str:
+def get_tts_prompt(key: str, default: Optional[str] = None) -> str:
     return TTS_PROMPTS.get(key, default or f"Prompt not found: {key}")
 
 
@@ -119,185 +63,185 @@ def _get_cache_dir(language: str) -> str:
     return TTS_CACHE_EN_DIR if language.upper() == "EN" else TTS_CACHE_ZH_DIR
 
 
-def _get_cached_file_path(text: str, language: str, key: str | None = None) -> str:
+def _get_cached_file_path(text: str, language: str, speed:str, key: Optional[str] = None) -> str:
+    # 使用 key 或 text 的 md5 作为文件名，后缀为 .mp3（保持简单）
+    cache_key = f"{text}_{language}_{speed}"
     text_hash = hashlib.md5((key or text).encode("utf-8")).hexdigest()
-    cache_dir = _get_cache_dir(language)
-    return os.path.join(cache_dir, f"{text_hash}.wav")  # Note .wav extension
+    cache_dir = "tts_cache"
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, f"{text_hash}.mp3")
+
+
+def init_tts():
+    global TTS_INITIALIZED
+    if TTS_INITIALIZED:
+        return
+    # 创建缓存目录
+    os.makedirs(TTS_CACHE_EN_DIR, exist_ok=True)
+    os.makedirs(TTS_CACHE_ZH_DIR, exist_ok=True)
+
+    # 初始化 prompts
+    load_tts_prompts()
+
+    # 初始化 pygame mixer（允许播放 mp3/wav）
+    try:
+        pygame.mixer.init(frequency=22050)
+    except Exception as e:
+        # 在某些环境下需要不同参数或提前安装 SDL 支持库
+        print(f"[TTS Manager] Warning: pygame.mixer.init failed: {e}. Trying default init.")
+        try:
+            pygame.mixer.init()
+        except Exception as e2:
+            print(f"[TTS Manager] ERROR: pygame mixer cannot be initialized: {e2}")
+
+    TTS_INITIALIZED = True
+    print("[TTS Manager] TTS initialized (gTTS + pygame).")
 
 
 def _play_audio_file(file_path: str):
-    """Play an audio file using pygame.mixer (blocking)."""
-    # Since we're using PyAudio for streaming, this function is kept for compatibility
-    # but won't be used in the new implementation
-    pass
+    try:
+        # 如果正在播放，先停止
+        if pygame.mixer.get_init() is None:
+            try:
+                pygame.mixer.init()
+            except Exception:
+                pass
 
-
-class Callback(ResultCallback):
-    _player = None
-    _stream = None
-    _completed = False
-    _error = None
-
-    def __init__(self, player):
-        self._player = player
-        self.audio_data = bytearray()
-
-    def on_open(self):
-        print("[TTS Callback] Connection established")
-        # Create stream when connection opens
-        if self._player is not None:
-            self._stream = self._player.open(
-                format=pyaudio.paInt16, channels=1, rate=22050, output=True
-            )
-        else:
-            print("[TTS Callback] Warning: Player is None, skipping stream creation")
-            # Create a mock stream object for testing
-            self._stream = None
-        self._completed = False
-        self._error = None
-
-    def on_complete(self):
-        print("[TTS Callback] Speech synthesis complete")
-        self._completed = True
-
-    def on_error(self, message: str):
-        print(f"[TTS Callback] Speech synthesis error: {message}")
-        self._error = message
-        self._completed = True
-
-    def on_close(self):
-        print("[TTS Callback] Connection closing")
-        # Stop and close stream
-        if self._stream:
-            print("[TTS Callback] Stopping and closing audio stream")
-            # Wait a bit to ensure all audio data has finished playing
-            import time
-
-            time.sleep(0.1)  # Small delay to allow buffer to drain
-            self._stream.stop_stream()
-            self._stream.close()
-            print("[TTS Callback] Audio stream closed")
-        self._completed = True
-
-    def on_event(self, message):
+        pygame.mixer.music.stop()
+        pygame.mixer.music.unload()
+    except Exception:
+        # ignore
         pass
 
-    def on_data(self, data: bytes) -> None:
-        print(f"[TTS Callback] Received audio data, length: {len(data)}")
-        # Store audio data for saving to file
-        self.audio_data.extend(data)
-        # Play audio data
-        if self._stream:
-            # Set volume to 100% before playing audio (only once per stream)
-            if not hasattr(self, "_volume_set"):
-                try:
-                    # Attempt to set system volume to 100%
-                    if hasattr(self, "_volume_set") and not self._volume_set:
-                        # Platform-specific volume setting would go here
-                        # For now, we'll just mark it as set
-                        self._volume_set = True
-                except Exception as e:
-                    print(f"[TTS Callback] Warning: Could not set system volume: {e}")
-                    self._volume_set = True  # Prevent repeated attempts
-
-            print("[TTS Callback] Playing audio data")
-            self._stream.write(data)
-            print("[TTS Callback] Finished playing audio data")
-
-    def is_completed(self):
-        return self._completed
-
-    def get_error(self):
-        return self._error
+    try:
+        pygame.mixer.music.load(file_path)
+        pygame.mixer.music.play()
+        tmp_mp3=None
+        
+        while pygame.mixer.music.get_busy():
+              continue
+        return(tmp_mp3)
+    except Exception as e:
+        print(f"TTS: Error generating/playing audio: {e}")
+        return None
 
 
-def speak(text: str, language: str, speed: float = 1.0, key: str | None = None):
-    """Generates and plays speech using DashScope CosyVoice."""
-    global PYAUDIO_INSTANCE
 
-    if not TTS_INITIALIZED:
-        print(f"[TTS Manager] CRITICAL: TTS not initialized. Fallback: {text}")
-        return
+def _synthesize_to_file_gtts(text: str, language: str, out_path: str, speed: float = 3.0):
+    lang_code = LANG_CODE_MAP.get(language.upper(), "en")
+    tmp_mp3 = out_path + ".tmp.mp3"
+    try:
+        tts = gTTS(text=text, lang=lang_code)
+        tts.save(tmp_mp3)
+       
+    except Exception as e:
+        if os.path.exists(tmp_mp3):
+            os.remove(tmp_mp3)
+        raise RuntimeError(f"gTTS synthesis failed: {e}")
 
-    # Check cache first
-    cached_file_path = _get_cached_file_path(text, language, key)
-    if os.path.exists(cached_file_path):
-        print(f"[TTS Manager] Using cached file: {cached_file_path}")
-        # For cached files, we can play them with simpleaudio
-        try:
-            # Set volume to 100% before playing audio
-            try:
-                # Attempt to set system volume to 100%
-                # Platform-specific volume setting would go here
-                pass
-            except Exception as e:
-                print(f"[TTS Manager] Warning: Could not set system volume: {e}")
+    # 若最终文件是 .mp3（out_path endswith .mp3），直接重命名
+    try:
+        os.replace(tmp_mp3, out_path)
+    except Exception:
+        # fallback copy & remove
+        import shutil
+        shutil.copy(tmp_mp3, out_path)
+        os.remove(tmp_mp3)
 
-            import simpleaudio as sa
 
-            wave_obj = sa.WaveObject.from_wave_file(cached_file_path)
-            play_obj = wave_obj.play()
-            play_obj.wait_done()  # Wait until sound has finished playing
-        except Exception as e:
-            print(
-                f"[TTS Manager] Error playing cached audio file {cached_file_path}: {e}"
-            )
-        return
+def speak(text: str, language: str, speed: float = 2.0, key: None = None):
+
+    tts=None
 
     try:
-        # Create callback with PyAudio instance
-        callback = Callback(PYAUDIO_INSTANCE)
-
-        # Create synthesizer instance
-        synthesizer = SpeechSynthesizer(
-            model="cosyvoice-v2",
-            voice=COSVOICE_VOICE_MAP[language.upper()],
-            format=AudioFormat.PCM_22050HZ_MONO_16BIT,
-            callback=callback,
-        )
-
-        # Call the synthesizer with text
-        synthesizer.call(text)
-
-        # Wait for completion
-        import time
-
-        while not callback.is_completed():
-            time.sleep(0.1)
-
-        # Check for errors
-        if callback.get_error():
-            print(f"[TTS Manager] DashScope synthesis error: {callback.get_error()}")
+        # 规范化语言代码：转换为小写
+        language = language.lower()
+        print(f"Normalized language code: '{language}'")
+        
+        # 为不同语言设置正确的参数
+        if language == 'zh':
+            tts_lang = 'zh'
+            tts_slow = False
+        else:
+            tts_lang = 'en'
+            tts_slow = False
+        
+        print(f"Generating TTS for {tts_lang}: {text[:30]}...")
+    except Exception as e:
+        print(f'[TTS Error] {e}. Fallback: {text}')
+    try:    
+        # 尝试多种中文语言代码
+        if language.lower() in ['zh', 'cn', 'chinese']:
+            lang_options = ['zh', 'zh-cn', 'zh-tw', 'zh-CN', 'zh-TW']
+        else:
+            lang_options = [language, 'en', 'en-US']
+        
+        success = False
+        for lang_option in lang_options:
+            try:
+                print(f"Trying language: {lang_option}")
+                tts = gTTS(text=text, lang=lang_option, slow=False)
+                success = True
+                print(f"Success with language: {lang_option}")
+                break
+            except Exception as lang_error:
+                print(f"Failed with {lang_option}: {lang_error}")
+                continue
+        
+        if not success:
+            print(f"All language options failed for: {language}")
+            print(f"Fallback text: {text}")
             return
 
-        # Save to cache
-        if len(callback.audio_data) > 0:
-            cache_dir = _get_cache_dir(language)
-            os.makedirs(cache_dir, exist_ok=True)
-
-            # Convert PCM to WAV for caching
-            import wave
-
-            with wave.open(cached_file_path, "wb") as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(22050)  # 22050 Hz
-                wav_file.writeframes(callback.audio_data)
-            print(f"[TTS Manager] Cached generated speech to: {cached_file_path}")
-
     except Exception as e:
-        print(f"[TTS Manager] DashScope synthesis error: {e}")
+        print(f"[TTS Critical Error] {e}")
+        print(f"Fallback: {text}")
+        
+    tts = gTTS(text=text, lang=language, slow=False)
+    try:
+        # 直接转换语言代码
+        if language == 'zh':
+            tts_lang = 'zh-cn'
+        else:
+            tts_lang = language  # 保持其他语言不变
+    except Exception as e:
+        print(f'[TTS Manager]Unsupported language code:{language},defaulting to English.Error:{e}')
+
+    # 使用缓存
+    try:
+        cached_file_path = _get_cached_file_path(text, language, speed)
+        language=language.lower()
+    except Exception as e:
+        print(f'[TTS Manager]Error generating cache path:{e}')
+        return
+
+    if os.path.exists(cached_file_path):
+        print(f"[TTS Manager] Using cached file: {cached_file_path}")
+        _play_audio_file(cached_file_path)
+        return
+
+    # 合成并缓存
+    try:
+        print(f"[TTS Manager] Synthesizing: '{text[:40]}...' (lang={language})")
+        _synthesize_to_file_gtts(text, language, cached_file_path, speed=speed)
+        print(f"[TTS Manager] Cached generated speech to: {cached_file_path}")
+        _play_audio_file(cached_file_path)
+    
+    except Exception as e:
+        print(f"[TTS Manager] TTS synthesis error: {e}")
 
 
 def pregenerate_fixed_strings():
     print("[TTS Manager] Pre-generating fixed strings...")
+    if not TTS_PROMPTS:
+        load_tts_prompts()
     for key, prompt_text in TTS_PROMPTS.items():
-        language = (
-            "ZH" if key.endswith("_zh") else "EN" if key.endswith("_en") else None
-        )
+        language = "ZH" if key.endswith("_zh") else "EN" if key.endswith("_en") else None
         if language:
-            print(
-                f"[TTS Manager] Generating: '{prompt_text}' ({language}) for key '{key}'"
-            )
-            speak(prompt_text, language, key=key)
+            print(f"[TTS Manager] Generating: '{prompt_text}' ({language}) for key '{key}'")
+            try:
+                speak(prompt_text, language, key=key)
+            except Exception as e:
+                print(f"[TTS Manager] Warning: failed to generate prompt {key}: {e}")
     print("[TTS Manager] Pre-generation complete.")
+

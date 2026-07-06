@@ -5,7 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const staticCanvas = document.getElementById('static-canvas');
     const dynamicCanvas = document.getElementById('dynamic-canvas');
     if (!staticCanvas || !dynamicCanvas) return;
-    
+
     const staticCtx = staticCanvas.getContext('2d');
     const dynamicCtx = dynamicCanvas.getContext('2d');
 
@@ -42,27 +42,28 @@ document.addEventListener('DOMContentLoaded', () => {
             // Fetch map data
             const mapResponse = await fetch('/api/map_data');
             mapData = await mapResponse.json();
-            
+
             // Fetch initial robot position
             const positionResponse = await fetch('/api/robot_position');
             const positionData = await positionResponse.json();
             dynamicState.position = positionData.position;
             dynamicState.angle = positionData.angle;
-            
+
             // Setup canvas sizes and listeners
             window.addEventListener('resize', handleResize);
             handleResize(); // Initial size calculation
-            
+
             // Draw the non-moving parts ONCE
             drawStaticLayer();
-            
+
             // Connect to the server for real-time updates
             connectWebSocket();
 
             // Start the animation loop for moving parts
             requestAnimationFrame(drawDynamicLayer);
 
-        } catch (error) {
+        }
+        catch (error) {
             console.error("Failed to initialize map:", error);
             staticCtx.clearRect(0, 0, staticCanvas.width, staticCanvas.height);
             staticCtx.fillText('Error loading map.', staticCanvas.width / 2, staticCanvas.height / 2);
@@ -87,10 +88,10 @@ document.addEventListener('DOMContentLoaded', () => {
         socket.on('update_obstacles', (data) => {
             dynamicState.obstacles = data.obstacles;
         });
-        
+
         // Listen for errors to show alerts (can be handled in main.js)
         socket.on('navigation_error', (data) => {
-             alert(`Navigation Error: ${data.message}`);
+            alert(`Navigation Error: ${data.message}`);
         });
     }
 
@@ -100,17 +101,17 @@ document.addEventListener('DOMContentLoaded', () => {
     function drawStaticLayer() {
         // Clear the entire canvas
         staticCtx.clearRect(0, 0, staticCanvas.width, staticCanvas.height);
-        
+
         // Fill the background
         staticCtx.fillStyle = CONFIG.COLORS.open;
         staticCtx.fillRect(0, 0, staticCanvas.width, staticCanvas.height);
-        
+
         // Calculate the offset to center the map
         const mapWidth = mapData.width * cellSize;
         const mapHeight = mapData.height * cellSize;
         const offsetX = (staticCanvas.width - mapWidth) / 2;
         const offsetY = (staticCanvas.height - mapHeight) / 2;
-        
+
         // Draw Grid
         for (let y = 0; y < mapData.height; y++) {
             for (let x = 0; x < mapData.width; x++) {
@@ -127,7 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const poi of Object.values(mapData.pois)) {
             const x = offsetX + poi.coordinates.x * cellSize + cellSize / 2;
             const y = offsetY + poi.coordinates.y * cellSize + cellSize / 2;
-            
+
             staticCtx.fillStyle = CONFIG.COLORS.poi;
             staticCtx.beginPath();
             staticCtx.arc(x, y, cellSize / 3, 0, 2 * Math.PI);
@@ -140,7 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
             staticCtx.fill();
         }
     }
-    
+
     // Called every frame
     function drawDynamicLayer() {
         dynamicCtx.clearRect(0, 0, dynamicCanvas.width, dynamicCanvas.height);
@@ -149,7 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (dynamicState.path && dynamicState.path.length > 0) {
             drawPath(dynamicState.path);
         }
-        
+
         // Draw Dynamic Obstacles
         if (dynamicState.obstacles && dynamicState.obstacles.length > 0) {
             dynamicCtx.fillStyle = CONFIG.COLORS.dynamicObstacle;
@@ -158,25 +159,25 @@ document.addEventListener('DOMContentLoaded', () => {
             const mapHeight = mapData.height * cellSize;
             const offsetX = (dynamicCanvas.width - mapWidth) / 2;
             const offsetY = (dynamicCanvas.height - mapHeight) / 2;
-            
+
             dynamicState.obstacles.forEach(obs => {
                 dynamicCtx.fillRect(offsetX + obs[0] * cellSize, offsetY + obs[1] * cellSize, cellSize, cellSize);
             });
         }
-        
+
         // Draw Robot
         drawRobot(dynamicState.position, dynamicState.angle);
 
         requestAnimationFrame(drawDynamicLayer);
     }
-    
+
     function drawPath(path) {
         // Calculate the offset to center the map
         const mapWidth = mapData.width * cellSize;
         const mapHeight = mapData.height * cellSize;
         const offsetX = (dynamicCanvas.width - mapWidth) / 2;
         const offsetY = (dynamicCanvas.height - mapHeight) / 2;
-        
+
         dynamicCtx.strokeStyle = CONFIG.COLORS.path;
         dynamicCtx.lineWidth = CONFIG.PATH.lineWidth;
         dynamicCtx.lineJoin = 'round';
@@ -189,14 +190,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         dynamicCtx.stroke();
     }
-    
+
     function drawRobot(position, angle) {
         // Calculate the offset to center the map
         const mapWidth = mapData.width * cellSize;
         const mapHeight = mapData.height * cellSize;
         const offsetX = (dynamicCanvas.width - mapWidth) / 2;
         const offsetY = (dynamicCanvas.height - mapHeight) / 2;
-        
+
         const x = offsetX + position.x * cellSize + cellSize / 2;
         const y = offsetY + position.y * cellSize + cellSize / 2;
         const radius = cellSize / 2; // Larger robot radius
@@ -225,10 +226,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleResize() {
         const container = staticCanvas.parentElement;
         const containerWidth = container.clientWidth;
-        
+
         // Calculate height based on the actual map aspect ratio (width:height = 12:8 = 3:2)
         const containerHeight = (containerWidth * 2) / 3;
-        
+
         staticCanvas.width = containerWidth;
         staticCanvas.height = containerHeight;
         dynamicCanvas.width = containerWidth;
@@ -245,5 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Start ---
-    init();
-});
+    {
+        init(),
+            console.log('visualisation.js is loaded');
+    })

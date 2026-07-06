@@ -3,11 +3,22 @@
 Script to generate TTS prompts from raw POI data.
 """
 
+#!/usr/bin/env python3
+# generate_tts_prompts.py (merged with optional synthesis step via tts.speak)
+
 import json
 import os
 import importlib.resources
+import sys
 
+# 尝试导入 tts 模块（如果存在就会用于合成）
+try:
+    import tts
+except Exception as _e:
+    tts = None
+    # 不打印堆栈以免输出过多，运行时若合成失败会在后面提示
 
+# ---------- 原有函数（保留并略作注释） ----------
 def load_poi_data_from_package():
     """
     Load POI data from the file system.
@@ -21,7 +32,7 @@ def load_poi_data_from_package():
         current_dir = os.path.dirname(os.path.abspath(__file__))
         # Navigate to the data directory
         data_dir = os.path.join(os.path.dirname(current_dir), "data")
-        data_file_path = os.path.join(data_dir, "raw_poi_data.json")
+        data_file_path = os.path.join('data', "raw_poi_data.json")
 
         # Check if the file exists
         if os.path.exists(data_file_path):
@@ -68,27 +79,42 @@ def generate_poi_prompts(poi_data):
 
     # Generate prompts for each POI
     for poi in poi_data.get("pois", []):
-        poi_id = poi["id"]
+        poi_id = poi.get("id") or poi.get("uid") or None
+        if poi_id is None:
+            # 跳过没有 id 的条目
+            continue
+
+        # 支持 name 为 dict 或 字符串
         poi_name_en = (
-            poi["name"]["en"] if isinstance(poi["name"], dict) else poi["name"]
+            poi["name"]["en"] if isinstance(poi.get("name"), dict) and "en" in poi.get("name") else poi.get("name")
         )
         poi_name_zh = (
-            poi["name"]["zh"] if isinstance(poi["name"], dict) else poi["name"]
+            poi["name"]["zh"] if isinstance(poi.get("name"), dict) and "zh" in poi.get("name") else poi.get("name")
         )
+
+        # 若任一方向为空，尝试从其他字段取值
+        if not poi_name_en:
+            poi_name_en = poi.get("name_en") or poi.get("english_name") or poi.get("title") or ""
+        if not poi_name_zh:
+            poi_name_zh = poi.get("name_zh") or poi.get("chinese_name") or poi.get("title") or ""
+
+        # 保证为字符串
+        poi_name_en = str(poi_name_en) if poi_name_en is not None else ""
+        poi_name_zh = str(poi_name_zh) if poi_name_zh is not None else ""
 
         # Format names for better TTS
         poi_name_en, poi_name_zh = format_poi_name_for_tts(poi_name_en, poi_name_zh)
 
         # Arrival prompts - more natural phrasing without redundant descriptions
         prompts[f"arrival_{poi_id}"] = {
-            "en": f"We've arrived at {poi_name_en}.",  # More natural phrasing
-            "zh": f"我们已到达{poi_name_zh}！",  # More natural Chinese phrasing
+            "en": f"We've arrived at {poi_name_en}.",
+            "zh": f"我们已到达{poi_name_zh}！",
         }
 
         # Navigation prompts - more natural
         prompts[f"navigate_{poi_id}"] = {
             "en": f"Let's go to {poi_name_en}.",
-            "zh": f"我们去{poi_name_zh}吧！",  # Improved Chinese phrasing as requested
+            "zh": f"我们去{poi_name_zh}吧！",
         }
 
     return prompts
@@ -142,7 +168,6 @@ def generate_system_prompts():
 
     # Language set prompts - more natural
     prompts["language_set_en"] = {"en": "The language has been set."}
-
     prompts["language_set_zh"] = {"zh": "语言设置完成。"}
 
     return prompts
@@ -191,8 +216,7 @@ def save_prompts_to_package(prompts):
         try:
             if hasattr(importlib.resources, "files"):
                 # Python 3.9+
-                data_dir = importlib.resources.files("museum_bot.data")
-                output_path = data_dir.joinpath("generated_tts_prompts.json")
+                output_path = os.path.join("data", "generated_tts_prompts.json")
 
                 # For Python 3.9+, we need to get the actual file path
                 # Since we can't directly write with importlib.resources, we'll use the filesystem path
@@ -241,6 +265,7 @@ def save_prompts_to_package(prompts):
         return False
 
 
+# ---------- main 逻辑（合并：原有 + 可选合成） ----------
 def main():
     """Main function to generate TTS prompts."""
     print("Generating TTS prompts...")
@@ -268,6 +293,39 @@ def main():
     # Save prompts to package
     if save_prompts_to_package(flattened_prompts):
         print("TTS prompt generation complete.")
+
+        # ===== 新增：若 tts 模块可用，则初始化并合成缓存 =====
+        if tts is not None:
+            try:
+                print("[generator] tts module detected. Initializing and synthesizing prompts...")
+                # init_tts should be provided by your tts.py (gTTS 版本)
+                try:
+                    tts.init_tts()
+                except Exception as e_init:
+                    print(f"[generator] Warning: tts.init_tts() raised an exception: {e_init}. Continuing to synthesis attempt.")
+
+                total = len(flattened_prompts)
+                i = 0
+                for key, text in flattened_prompts.items():
+                    i += 1
+                    # 判断语言后缀
+                    if key.endswith("_en"):
+                        lang = "EN"
+                    elif key.endswith("_zh"):
+                        lang = "ZH"
+                    else:
+                        lang = "EN"  # 默认 EN
+                    print(f"[generator] ({i}/{total}) Synthesizing key={key} lang={lang} text='{text[:60]}...'")
+                    try:
+                        # tts.speak(text, language=lang, key=key) 会负责缓存并播放（若实现如此）
+                        tts.speak(text, language=lang, key=key)
+                    except Exception as e_synth:
+                        print(f"[generator] Warning: synthesis failed for {key}: {e_synth}")
+                print("[generator] All prompts synthesized (or attempted).")
+            except Exception as e_outer:
+                print(f"[generator] Warning: overall synthesis step failed: {e_outer}")
+        else:
+            print("[generator] tts module not found — skipping audio synthesis step.")
         return 0
     else:
         print("Failed to save TTS prompts. Exiting.")

@@ -12,27 +12,20 @@ import queue
 from enum import Enum
 
 # Import the separated components
-try:
-    from . import web, navigation, ai, driver, tts
-except ImportError:
     # Fallback for running directly with python app.py
-    import web
-    import navigation
-    import ai
-    import driver
-    import tts
 
+import web
+import navigation
+import ai
+import driver
+import tts
+import pygame
 
 # --- STATE MACHINE SETUP ---
 class RobotState(Enum):
     IDLE = 1
     NAVIGATING = 2
     SPEAKING = 3
-
-
-# Initialize TTS models
-tts.initialize_tts()
-
 
 class Robot:
     def __init__(self, data_filepath, socketio=None, initial_language="EN"):
@@ -141,6 +134,9 @@ class Robot:
         last_ai_response = answer  # Store AI response for web UI
         # Add AI response to conversation history
         web.conversation_history.append(("ai", answer))
+        web.last_ai_response = answer
+        web.follow_up_questions = parsed_response["follow_up_questions"]
+        web.conversation_history.append(("ai", answer))
 
         # Limit conversation history to prevent it from growing too large
         if len(web.conversation_history) > 20:  # Keep only the last 20 messages
@@ -149,8 +145,12 @@ class Robot:
         ai.generate_tts_and_play(answer, self.language)
         self.tts_ready = True  # Set TTS ready flag
         print("[ROBOT] TTS ready flag set to True")
-
-        self.state = RobotState.IDLE
+        
+        if self.state == RobotState.SPEAKING and not pygame.mixer.music.get_busy():
+            self.state = RobotState.IDLE
+            print("[ROBOT] TTS finished, state set to IDLE")
+         
+    
 
     def go_to_poi(self, target_poi_id: str):
         """Handles the logic for navigating to a POI."""
@@ -467,7 +467,6 @@ def robot_logic_thread_func():
             # No command received, just continue the loop
             pass
         time.sleep(0.1)
-
 
 def start_museum_bot(
     data_file_path="data/raw_poi_data.json", port=5001, host="0.0.0.0"

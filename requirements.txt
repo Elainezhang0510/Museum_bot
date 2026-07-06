@@ -1,4 +1,4 @@
-Flask==3.1.1
+Flask
 numpy==2.3.2
 dashscope==1.24.0
 openai==1.97.1
@@ -6,3 +6,6 @@ simpleaudio==1.0.4
 PyAudio==0.2.14
 Flask-SocketIO==5.5.1
 Pillow==11.3.0
+gTTS
+pygame
+pydub

@@ -3,6 +3,8 @@ import queue
 from enum import Enum
 from flask_socketio import SocketIO
 import json
+import os
+from datetime import datetime
 
 
 # --- STATE MACHINE SETUP ---
@@ -166,6 +168,42 @@ def ask():
     command_queue.put(("ASK", question))
     return redirect(url_for("index"))
 
+@app.route("/voice_input", methods=["POST"])
+def handle_voice_input():
+    global last_response, last_ai_response, conversation_history, follow_up_questions
+    
+    # 获取语音识别的文本
+    voice_text = request.json.get("text", "")
+    
+    if not voice_text:
+        return jsonify({"error": "No voice text provided"}), 400
+    
+    # 显示用户语音输入
+    last_response = voice_text
+    last_ai_response = ""  # 清空之前的AI回应
+    
+    # 重置追问问题
+    follow_up_questions = []
+    
+    # 重置TTS准备标志
+    if robot_instance:
+        robot_instance.tts_ready = False
+    
+    # 添加用户语音输入到对话历史
+    conversation_history.append(("user", voice_text))
+    
+    # 限制对话历史长度
+    if len(conversation_history) > 20:
+        conversation_history = conversation_history[-20:]
+    
+    # 将语音输入放入命令队列进行处理
+    command_queue.put(("ASK", voice_text))
+    
+    return jsonify({
+        "status": "success", 
+        "message": "Voice input received and queued for processing"
+    })
+
 
 @app.route("/ask_arrival_question", methods=["POST"])
 def ask_arrival_question():
@@ -242,7 +280,6 @@ def get_map_data():
         }
     )
 
-
 # --- NEW: API Endpoint for Robot's Current Position ---
 @app.route("/api/robot_position")
 def get_robot_position():
@@ -259,6 +296,48 @@ def get_robot_position():
         }
     )
 
+@app.route("/api/latest-response")
+def get_latest_response():
+    return jsonify({
+        "last_ai_response": last_ai_response,
+        "conversation_history": conversation_history,
+        "follow_up_questions": follow_up_questions
+    })
+
+
+@app.route('/upload_audio', methods=['POST'])
+def upload_audio():
+    try:
+        # 检查是否有文件上传
+        if 'audio' not in request.files:
+            return jsonify({'success': False, 'error': 'No audio file provided'})
+        
+        audio_file = request.files['audio']
+        
+        # 检查文件名是否为空
+        if audio_file.filename == '':
+            return jsonify({'success': False, 'error': 'No selected file'})
+        
+        # 生成安全的文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"recording_{timestamp}.webm"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        # 保存文件
+        audio_file.save(filepath)
+        
+        return jsonify({'success': True, 'message': 'File uploaded successfully', 'filename': filename})
+    
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/robot-status')
+def get_robot_status():
+    return jsonify({
+        'state': robot_instance.state.name if robot_instance else "INITIALIZING",
+    })
+
+
 
 def run_server(port=5001, host="0.0.0.0"):
     """Run the Flask web server."""
@@ -266,3 +345,4 @@ def run_server(port=5001, host="0.0.0.0"):
     with app.app_context():
         pass  # Sessions are stored client-side in Flask, so we can't clear them server-side
     socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True)
+
